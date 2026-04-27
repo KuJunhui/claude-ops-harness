@@ -12,15 +12,11 @@ if ! echo "$COMMAND" | grep -qE '^git (add|commit|push)'; then
   exit 0
 fi
 
-# 하네스 레포 자체에서는 .claude/ 커밋이 필요하므로 해당 패턴 제외
-IS_HARNESS_REPO=false
-if [ -f "$CLAUDE_PROJECT_DIR/install.sh" ] && grep -q "claude.*harness" "$CLAUDE_PROJECT_DIR/install.sh" 2>/dev/null; then
-  IS_HARNESS_REPO=true
-fi
-
+# .claude/ 내 개인 설정 파일만 차단 (팀 공유용 설정은 허용)
+# 허용: .claude/settings.json, .claude/commands/, .claude/hooks/, CLAUDE.md
+# 차단: .claude/settings.local.json
 SENSITIVE_PATTERNS=(
-  "CLAUDE.md"
-  ".claude/"
+  ".claude/settings.local.json"
   ".env"
   "application-secret.yml"
   "firebase-adminsdk.json"
@@ -43,10 +39,6 @@ if echo "$COMMAND" | grep -qE '^git add'; then
 
   for file in $CANDIDATES; do
     for pattern in "${SENSITIVE_PATTERNS[@]}"; do
-      # 하네스 레포에서는 .claude/ 패턴 건너뛰기
-      if [ "$IS_HARNESS_REPO" = true ] && [ "$pattern" = ".claude/" ]; then
-        continue
-      fi
       case "$file" in
         $pattern|*/$pattern|${pattern}*)
           BLOCKED_FILES+=("$file")
@@ -61,9 +53,6 @@ if echo "$COMMAND" | grep -qE '^git (commit|push)'; then
   STAGED=$(git diff --cached --name-only 2>/dev/null || true)
   for file in $STAGED; do
     for pattern in "${SENSITIVE_PATTERNS[@]}"; do
-      if [ "$IS_HARNESS_REPO" = true ] && [ "$pattern" = ".claude/" ]; then
-        continue
-      fi
       case "$file" in
         $pattern|*/$pattern|${pattern}*)
           BLOCKED_FILES+=("$file")
