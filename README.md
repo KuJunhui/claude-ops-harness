@@ -2,8 +2,6 @@
 
 Java/Spring 프로젝트 운영 중 발생하는 문제를 Claude Code로 **분석부터 배포까지 자동화**하는 하네스입니다.
 
-팀원들이 동일한 Claude Code 환경(커스텀 명령어, hooks, 권한 설정)을 공유할 수 있도록 별도 레포로 관리합니다.
-
 > 대상 프로젝트에서 `.claude/settings.local.json`은 `.gitignore`에 등록되어 커밋되지 않으며, 나머지 `.claude/` 파일과 `CLAUDE.md`는 공유됩니다.
 
 ## 포함 파일
