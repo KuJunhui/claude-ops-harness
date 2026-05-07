@@ -12,9 +12,6 @@ if ! echo "$COMMAND" | grep -qE '^git (add|commit|push)'; then
   exit 0
 fi
 
-# .claude/ 내 개인 설정 파일만 차단 (팀 공유용 설정은 허용)
-# 허용: .claude/settings.json, .claude/commands/, .claude/hooks/, CLAUDE.md
-# 차단: .claude/settings.local.json
 SENSITIVE_PATTERNS=(
   ".claude/settings.local.json"
   ".env"
