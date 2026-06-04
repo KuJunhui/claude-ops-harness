@@ -280,7 +280,7 @@ Opus 검토 완료 후, **Agent tool로 서브에이전트를 호출**하여 아
      1. `gh issue close <배포이슈번호>` (default branch가 dev라 자동 완료 안 됨)
      2. `git branch -D "<브랜치명>"`
      3. `git push origin --delete "<브랜치명>"` (이미 삭제된 경우 무시 — GitHub auto-delete head branches 설정 대응)
-     4. 사용된 워크트리 정리: `.claude/worktrees/` 내 에이전트 디렉토리를 `git worktree remove <path> --force`로 제거 후 `git worktree prune` 실행
+     4. 사용된 워크트리 정리: `.claude/worktrees/` 내 에이전트 디렉토리를 `git worktree remove <path> --force`로 제거 후 `git worktree prune` 실행. 이후 빈 디렉토리가 남아 있으면 `rm -rf .claude/worktrees/agent-*`로 삭제하고, `.claude/worktrees/` 자체가 비어 있으면 `rmdir .claude/worktrees`로 제거한다.
    - 실패 → run-id 확인: `gh run list --branch main --workflow cd-oci-a1-main.yml --commit $CD_SHA --limit 1 --json databaseId --jq '.[0].databaseId'` → `gh run view <run-id> --log-failed`로 workflow 로그 요약과 **배포 이슈 번호**를 반환하고 **서브에이전트 종료**
 5. 최종 결과 보고: 배포 성공 여부와 함께 **cleanup 실패 내역이 있으면 포함**하여 반환 (배포 성공 + cleanup 실패는 파이프라인 실패로 취급하지 않는다)
 
