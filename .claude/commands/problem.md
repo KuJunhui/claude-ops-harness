@@ -262,7 +262,7 @@ Opus 검토 완료 후, **Agent tool로 서브에이전트를 호출**하여 아
 - 이슈/PR 생성 시 GitHub 템플릿 형식 준수
 ### Phase 7b: main 머지
 
-1. `gh pr merge <배포PR번호> --squash`
+1. `gh pr merge <배포PR번호> --merge`
    - 충돌(`CONFLICTING`) 발생 시 에러 내용을 반환하고 **서브에이전트 종료** (메인 에이전트가 충돌을 해결한다)
 
 ### Phase 8: CD & 정리
@@ -301,36 +301,11 @@ Phase 6~8에서 파이프라인 실패가 발생하면:
    | Phase 6-5 | dev PR 충돌 (`CONFLICTING`) | 충돌 해결 → **Phase 6-5**부터 | dev PR 재머지 시도 |
    | Phase 7a-2 | CI 실패 (GHCR 빌드) | 코드 수정 → **Phase 6**부터 | 새 커밋 필요, 새 dev PR 생성 |
    | Phase 7a-5/6 | 배포 PR 체크 실패 | 코드 수정 → **Phase 6**부터 | 새 커밋 필요, 새 dev PR 생성 |
-   | Phase 7b-1 | 배포 PR 충돌 (`CONFLICTING`) | **「배포 PR 충돌 해결 (cherry-pick 배포)」** 절차 적용 | squash merge 히스토리 분기 대응 |
+   | Phase 7b-1 | 배포 PR 충돌 (`CONFLICTING`) | 충돌 해결 → **Phase 7b**부터 | 배포 PR 재머지 시도 |
    | Phase 8-3/4 | CD 실패 | 코드 수정 → **Phase 6**부터 | 새 커밋 필요, 배포 이슈/PR 재사용 |
 
 3. 재시작 시 새 브랜치가 필요하면 `fix/#원본번호`를 사용한다 (기존 로컬 브랜치가 있으면 삭제 후 생성)
 4. default branch가 dev이므로 main에 머지된 PR의 `close #N`은 이슈를 자동으로 닫지 않는다 — 배포 이슈는 명시적으로 닫아야 한다
-
-## 배포 PR 충돌 해결 (cherry-pick 배포)
-
-squash merge 환경에서 dev → main 배포 PR이 `CONFLICTING` 상태가 되면, main과 dev의 커밋 히스토리가 분기되어 GitHub이 자동 병합할 수 없는 상황이다. main을 dev로 merge하는 것은 금지이므로, main에서 임시 브랜치를 만들어 cherry-pick으로 해결한다.
-
-### 절차
-
-1. 충돌 중인 배포 PR을 닫는다: `gh pr close <배포PR번호>`
-2. main에서 임시 배포 브랜치 생성:
-   ```bash
-   git fetch origin main
-   git checkout -b "deploy/#<배포이슈번호>" origin/main
-   ```
-3. dev의 squash 머지 커밋을 cherry-pick:
-   ```bash
-   git cherry-pick <MERGE_SHA>
-   ```
-   - 충돌 발생 시 수동 해결 후 `git cherry-pick --continue`
-4. 임시 브랜치 push 및 배포 PR 생성:
-   ```bash
-   git push -u origin "deploy/#<배포이슈번호>"
-   gh pr create --base main --head "deploy/#<배포이슈번호>" --title "[CHORE/#<배포이슈번호>] 배포" --body "..."
-   ```
-5. **체크 스킵**: 이 프로젝트의 CI(`ci.yml`)는 `pull_request: branches: [dev]`, CI(`ci-ghcr.yml`)는 `push: branches: [dev]`에서만 트리거된다. main 기반 임시 브랜치에서는 CI/CD/SonarCloud 체크가 실행되지 않는다. 동일 코드가 dev CI를 이미 통과한 상태이므로, **체크 대기 없이 즉시 squash merge**한다.
-6. 이후 Phase 8 (CD & 정리)로 진행한다. cleanup 시 `"deploy/#<배포이슈번호>"` 브랜치도 삭제 대상에 포함한다.
 
 ## 파괴적 DB 마이그레이션 2단계 배포 원칙
 
