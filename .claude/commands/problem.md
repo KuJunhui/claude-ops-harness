@@ -263,7 +263,7 @@ Opus 검토 완료 후, **Agent tool로 서브에이전트를 호출**하여 아
 ### Phase 7b: main 머지
 
 1. `gh pr merge <배포PR번호> --merge`
-   - 충돌(`CONFLICTING`) 발생 시 에러 내용을 반환하고 **서브에이전트 종료** (메인 에이전트가 충돌을 해결한다)
+   - 충돌(`CONFLICTING`) 발생 시 — **단방향 플로우 전제 위반 신호** (dev→main에서 충돌은 main에 dev에 없는 커밋이 존재한다는 의미). 에러 내용과 함께 "main 브랜치에 직접 커밋이 추가된 것으로 보입니다. main 히스토리를 확인해주세요."를 반환하고 **서브에이전트 종료** (메인 에이전트도 자동 해결을 시도하지 않고 사용자에게 보고한다)
 
 ### Phase 8: CD & 정리
 
@@ -301,7 +301,7 @@ Phase 6~8에서 파이프라인 실패가 발생하면:
    | Phase 6-5 | dev PR 충돌 (`CONFLICTING`) | 충돌 해결 → **Phase 6-5**부터 | dev PR 재머지 시도 |
    | Phase 7a-2 | CI 실패 (GHCR 빌드) | 코드 수정 → **Phase 6**부터 | 새 커밋 필요, 새 dev PR 생성 |
    | Phase 7a-5/6 | 배포 PR 체크 실패 | 코드 수정 → **Phase 6**부터 | 새 커밋 필요, 새 dev PR 생성 |
-   | Phase 7b-1 | 배포 PR 충돌 (`CONFLICTING`) | 충돌 해결 → **Phase 7b**부터 | 배포 PR 재머지 시도 |
+   | Phase 7b-1 | 배포 PR 충돌 (`CONFLICTING`) | **즉시 중단** → 사용자에게 보고 | 단방향 플로우 전제 위반 — main에 dev에 없는 커밋 존재. AI 자율 해결 금지, 사용자가 main 히스토리 확인 필요 |
    | Phase 8-3/4 | CD 실패 | 코드 수정 → **Phase 6**부터 | 새 커밋 필요, 배포 이슈/PR 재사용 |
 
 3. 재시작 시 새 브랜치가 필요하면 `fix/#원본번호`를 사용한다 (기존 로컬 브랜치가 있으면 삭제 후 생성)
@@ -353,24 +353,26 @@ GitHub Secrets → CD workflow env → SSH envs 파라미터 → Docker Compose 
 | # | 파일 | 작업 |
 |---|------|------|
 | 1 | `src/main/resources/application.yml` | `${NEW_VAR}` 참조 추가 |
-| 2 | 메인 Application 클래스 | `System.setProperty("NEW_VAR", dotenv.get("NEW_VAR"))` 추가 (dotenv 사용 시) |
+| 2 | `src/main/java/.../LoopinBeApplication.java` | `System.setProperty("NEW_VAR", dotenv.get("NEW_VAR"))` 추가 |
 | 3 | `.env` | 로컬 개발용 값 추가 |
 
 ### 프로덕션 배포 환경
 
-프로젝트의 CD 워크플로우와 Docker Compose 파일을 모두 확인하여 환경변수 전달 경로를 빠짐없이 추가한다.
-
-| # | 대상 | 작업 |
+| # | 파일 | 작업 |
 |---|------|------|
-| 4 | 각 CD 워크플로우 (`.github/workflows/cd-*.yml`) | `jobs.<job>.env`에 `NEW_VAR: ${{ secrets.NEW_VAR }}` 추가 |
+| 4 | `.github/workflows/cd-oci-a1-main.yml` | `jobs.deploy-main.env`에 `NEW_VAR: ${{ secrets.NEW_VAR }}` 추가 |
 | 5 | 위 파일 동일 | `steps[SSH].with.envs` 파라미터 목록에 `NEW_VAR` 추가 |
-| 6 | 각 Docker Compose 파일 (`docker/**/compose*.yml`) | app 서비스 `environment`에 `NEW_VAR: ${NEW_VAR}` 추가 |
+| 6 | `.github/workflows/cd-aws.yml` | 4-5와 동일 (`jobs.deploy-aws`) |
+| 7 | `.github/workflows/cd-oci-e2-app.yml` | 4-5와 동일 (`jobs.deploy-server1`) |
+| 8 | `docker/oci/a1_flex/compose.yml` | app 서비스 `environment`에 `NEW_VAR: ${NEW_VAR}` 추가 |
+| 9 | `docker/aws/compose.yml` | 8과 동일 |
+| 10 | `docker/oci/e2_1_micro/compose.server1.yml` | 8과 동일 |
 
 ### GitHub Secrets 확인
 
 `gh secret list`로 시크릿 등록 여부를 확인하고, 미등록 시 사용자에게 등록을 요청한다.
 
-> **제외 대상**: 앱이 아닌 서비스만 배포하는 워크플로우/Compose는 앱 환경변수 불필요 — 프로젝트의 인프라 전용 워크플로우(모니터링, 로그 수집, 데이터 서비스 등)는 대상에서 제외한다.
+> **제외 대상**: 앱이 아닌 서비스만 배포하는 워크플로우/Compose는 앱 환경변수 불필요 — `cd-oci-a1-server1.yml` (모니터링), `cd-oci-a1-server2.yml` (Loki), `cd-oci-e2-data.yml` (데이터), `compose.server2.yml`
 
 ## 규칙
 
@@ -383,4 +385,4 @@ GitHub Secrets → CD workflow env → SSH envs 파라미터 → Docker Compose 
 - 모든 `gh`/`git` 명령 실패 시 에러 내용 사용자에게 보고
 - 이슈/PR 생성 시 GitHub 템플릿 형식 준수
 - **파이프라인 실패 시 Opus 전환 규칙을 반드시 따른다** (위 섹션 참조)
-- **`dev` 브랜치에서 `git pull origin main`, `git merge main`, `git merge origin/main` 등 main을 dev로 merge하는 행위는 절대 금지한다.** 이 프로젝트는 dev → main 단방향 플로우이므로 main에 dev에 없는 커밋이 존재하지 않는다. squash merge 환경에서 main을 dev로 끌어오면 커밋 중복, 불필요한 merge 커밋, 충돌이 발생한다. 어떤 Phase에서도 자의적으로 브랜치 동기화를 시도하지 않는다.
+- **`dev` 브랜치에서 `git pull origin main`, `git merge main`, `git merge origin/main` 등 main을 dev로 merge하는 행위는 절대 금지한다.** 이 프로젝트는 dev → main 단방향 플로우이므로 main에 dev에 없는 커밋이 존재하지 않는다. squash merge 환경에서 main을 dev로 끌어오면 커밋 중복, 불필요한 merge 커밋, 충돌이 발생한다. 어떤 Phase에서도 자의적으로 브랜치 동기화를 시도하지 않는다. **이 전제의 역도 적용된다: 배포 PR(dev→main)에서 `CONFLICTING`이 발생하면 전제 위반 신호이므로 즉시 중단하고 사용자에게 main 히스토리 확인을 요청한다.**
