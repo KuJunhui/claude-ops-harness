@@ -4,12 +4,23 @@
 `/problem`, `/ship`에서 공통으로 사용하는 배포 파이프라인이다.
 브랜치명에 `#`이 포함되므로, 모든 git/gh 명령에서 브랜치명은 반드시 따옴표로 감싼다.
 
+## Preflight: 워크플로우 탐색
+
+파이프라인 실행 전, `.github/workflows/` 디렉토리를 탐색하여 다음을 파악한다:
+
+- **CI 워크플로우**: dev 브랜치 push/PR 시 트리거되는 워크플로우 파일명과 job/check 이름
+- **CD 워크플로우**: main 브랜치 push 시 트리거되는 워크플로우 파일명과 job 이름
+- **PR 체크**: 배포 PR에서 통과해야 하는 체크 이름 목록 (CI job, 코드 분석 도구 등)
+
+이 정보를 이후 Step에서 사용한다.
+
 ## Step 1-2: 커밋 → PR 체크 (Sonnet 서브에이전트 1)
 
 **Agent tool로 서브에이전트를 호출**하여 아래를 위임한다 (모델: 파이프라인 실패 전이면 `"sonnet"`, 실패 후이면 `"opus"` — 「실패 시 Opus 전환 규칙」 참조).
 서브에이전트 prompt에는 반드시 다음 정보를 포함한다:
 - 브랜치명, 타입, 이슈번호
 - 변경사항 요약
+- Preflight에서 파악한 CI/CD 워크플로우 정보 (파일명, check 이름)
 - 아래 Step 1 ~ Step 2의 전체 절차
 - 모든 `gh`/`git` 명령 실패 시 에러 내용을 반환하고 서브에이전트 종료
 - 이슈/PR 생성 시 GitHub 템플릿 형식 준수
@@ -26,18 +37,9 @@
    - 제목: `[TYPE/#이슈번호] 설명`
    - 출력 URL 끝의 숫자가 PR 번호 → 이후 단계에서 `<dev PR 번호>`로 사용
 5. 머지 가능 여부 및 CI 체크 확인 (30초 간격, 최대 10분):
-   ```bash
-   SECONDS=0
-   until [ "$(gh pr view <dev PR 번호> --json mergeable --jq '.mergeable')" != "UNKNOWN" ] && \
-         [ "$(gh pr checks <dev PR 번호> --json name,state --jq '[.[] | select(.name == "ci")] | (length == 1 and all(.[]; .state == "SUCCESS"))')" = "true" ]; do
-     if [ "$(gh pr checks <dev PR 번호> --json name,state --jq '[.[] | select(.name == "ci")] | any(.[]; .state == "FAILURE")')" = "true" ]; then echo "CI FAILED"; break; fi
-     if [ $SECONDS -ge 600 ]; then echo "TIMEOUT"; exit 1; fi
-     sleep 30
-   done
-   MERGEABLE=$(gh pr view <dev PR 번호> --json mergeable --jq '.mergeable')
-   CI_STATE=$(gh pr checks <dev PR 번호> --json name,state --jq '[.[] | select(.name == "ci")][0].state')
-   ```
-   - `MERGEABLE` + `CI_STATE == SUCCESS` → `gh pr merge <dev PR 번호> --squash` (--auto 사용 금지)
+   - `gh pr checks`로 dev PR의 CI 체크 상태를 폴링한다
+   - 전달받은 CI check 이름으로 성공 여부를 판단한다
+   - `MERGEABLE` + CI 통과 → `gh pr merge <dev PR 번호> --squash` (--auto 사용 금지)
    - `CONFLICTING` → 에러 내용을 반환하고 **서브에이전트 종료**
    - CI 실패 → 실패 로그를 반환하고 **서브에이전트 종료**
    - 타임아웃 → 에러 내용을 반환하고 **서브에이전트 종료**
@@ -46,38 +48,21 @@
 
 ### Step 2: CI & 배포 PR & 체크 대기
 
-1. dev push → CI(`CI - GHCR Build & Push`) 자동 트리거
+1. dev push → CI 자동 트리거
 2. CI 폴링 (60초 간격, 최대 15분):
-   ```bash
-   SECONDS=0
-   until [ "$(gh run list --branch dev --workflow ci-ghcr.yml --commit $MERGE_SHA --limit 1 --json status --jq '.[0].status')" = "completed" ]; do
-     if [ $SECONDS -ge 900 ]; then echo "CI TIMEOUT"; exit 1; fi
-     sleep 60
-   done
-   gh run list --branch dev --workflow ci-ghcr.yml --commit $MERGE_SHA --limit 1 --json conclusion --jq '.[0].conclusion'
-   ```
+   - 전달받은 CI 워크플로우 파일명으로 `gh run list --branch dev --workflow <CI워크플로우> --commit $MERGE_SHA`를 폴링한다
    - timeout 시 에러 내용을 반환하고 **서브에이전트 종료**
 3. CI 결과:
    - 성공:
      - `<배포 이슈 번호>`가 전달된 경우 → 해당 번호를 재사용
      - 전달되지 않은 경우 → 배포 이슈 생성: `gh issue create --title "[CHORE] 배포" --label "🔩 CHORE"` (본문: `.github/ISSUE_TEMPLATE/기타-수정.md`를 읽어서 그 구조를 따르되 PR 내용 요약으로 채움) → 출력 URL 끝의 숫자를 이후 단계에서 `<배포 이슈 번호>`로 사용
-   - 실패 → run-id 확인: `gh run list --branch dev --workflow ci-ghcr.yml --commit $MERGE_SHA --limit 1 --json databaseId --jq '.[0].databaseId'` → `gh run view <run-id> --log-failed` 로그 요약을 반환하고 **서브에이전트 종료**
+   - 실패 → `gh run view <run-id> --log-failed` 로그 요약을 반환하고 **서브에이전트 종료**
 4. 배포 PR 생성:
    - `<배포 PR 번호>`가 전달된 경우 → 해당 번호를 재사용
    - 전달되지 않은 경우 → `.github/PULL_REQUEST_TEMPLATE.md`를 읽어서 placeholder를 채운 뒤 → `gh pr create --base main --head dev --title "[CHORE/#배포이슈번호] 배포"` (본문에 `close #<배포이슈번호>` 포함) → 출력 URL 끝의 숫자를 이후 단계에서 `<배포 PR 번호>`로 사용
-5. 배포 PR 체크 폴링 (60초 간격, 최대 15분) — 다음 2개 체크 모두 통과 필요:
-   - `build-and-push` (CI - GHCR Build & Push)
-   - `SonarCloud Code Analysis` (SonarCloud GitHub App)
-   - 확인 명령어: `gh pr checks <배포 PR 번호> --json name,state --jq '[.[] | select(.name == "build-and-push" or .name == "SonarCloud Code Analysis")] | (length == 2 and all(.[]; .state == "SUCCESS"))'` → `true`이면 통과
-   - 폴링 방법:
-     ```bash
-     SECONDS=0
-     until [ "$(gh pr checks <배포 PR 번호> --json name,state --jq '[.[] | select(.name == "build-and-push" or .name == "SonarCloud Code Analysis")] | (length == 2 and all(.[]; .state == "SUCCESS"))')" = "true" ]; do
-       if [ "$(gh pr checks <배포 PR 번호> --json name,state --jq '[.[] | select(.name == "build-and-push" or .name == "SonarCloud Code Analysis")] | any(.[]; .state != "PENDING" and .state != "SUCCESS")')" = "true" ]; then echo "CHECK FAILED"; break; fi
-       if [ $SECONDS -ge 900 ]; then echo "PR CHECKS TIMEOUT"; exit 1; fi
-       sleep 60
-     done
-     ```
+5. 배포 PR 체크 폴링 (60초 간격, 최대 15분):
+   - 전달받은 PR 체크 이름 목록으로 모든 체크의 성공 여부를 폴링한다
+   - `gh pr checks <배포 PR 번호>`로 확인
 6. 체크 결과:
    - 모두 통과 → 배포 PR 번호와 배포 이슈 번호를 반환하고 **서브에이전트 종료**
    - 실패 → 실패한 체크 이름과 상세 내용, **배포 이슈 번호와 배포 PR 번호**를 반환하고 **서브에이전트 종료**
@@ -95,6 +80,7 @@
 검토 완료 후, **Agent tool로 서브에이전트를 호출**하여 아래를 위임한다 (모델: 파이프라인 실패 전이면 `"sonnet"`, 실패 후이면 `"opus"` — 「실패 시 Opus 전환 규칙」 참조).
 서브에이전트 prompt에는 반드시 다음 정보를 포함한다:
 - 배포 PR 번호, 배포 이슈 번호, 브랜치명
+- Preflight에서 파악한 CD 워크플로우 정보
 - 아래 Step 3 ~ Step 4의 전체 절차
 - 모든 `gh`/`git` 명령 실패 시 에러 내용을 반환하고 서브에이전트 종료
 - 이슈/PR 생성 시 GitHub 템플릿 형식 준수
@@ -106,17 +92,10 @@
 
 ### Step 4: CD & 정리
 
-1. main push → CD(`CD - OCI A1.Flex Deploy (Main)`) 자동 트리거
+1. main push → CD 자동 트리거
 2. 머지 커밋 SHA 확인: `CD_SHA=$(gh pr view <배포PR번호> --json mergeCommit --jq '.mergeCommit.oid')`
 3. CD 폴링 (60초 간격, 최대 20분):
-   ```bash
-   SECONDS=0
-   until [ "$(gh run list --branch main --workflow cd-oci-a1-main.yml --commit $CD_SHA --limit 1 --json status --jq '.[0].status')" = "completed" ]; do
-     if [ $SECONDS -ge 1200 ]; then echo "CD TIMEOUT"; exit 1; fi
-     sleep 60
-   done
-   gh run list --branch main --workflow cd-oci-a1-main.yml --commit $CD_SHA --limit 1 --json conclusion --jq '.[0].conclusion'
-   ```
+   - 전달받은 CD 워크플로우 파일명으로 `gh run list --branch main --workflow <CD워크플로우> --commit $CD_SHA`를 폴링한다
    - timeout 시 에러 내용을 반환하고 **서브에이전트 종료**
 4. CD 결과:
    - 성공 → 아래 cleanup을 순서대로 시도하되, **각 명령이 실패해도 중단하지 않고 계속 진행**한다 (실패 내역만 기록):
@@ -124,7 +103,7 @@
      2. `git branch -D "<브랜치명>"`
      3. `git push origin --delete "<브랜치명>"` (이미 삭제된 경우 무시 — GitHub auto-delete head branches 설정 대응)
      4. 사용된 워크트리 정리: `.claude/worktrees/` 내 에이전트 디렉토리를 `git worktree remove <path> --force`로 제거 후 `git worktree prune` 실행. 이후 빈 디렉토리가 남아 있으면 `rm -rf .claude/worktrees/agent-*`로 삭제하고, `.claude/worktrees/` 자체가 비어 있으면 `rmdir .claude/worktrees`로 제거한다.
-   - 실패 → run-id 확인: `gh run list --branch main --workflow cd-oci-a1-main.yml --commit $CD_SHA --limit 1 --json databaseId --jq '.[0].databaseId'` → `gh run view <run-id> --log-failed`로 workflow 로그 요약과 **배포 이슈 번호**를 반환하고 **서브에이전트 종료**
+   - 실패 → `gh run view <run-id> --log-failed`로 workflow 로그 요약과 **배포 이슈 번호**를 반환하고 **서브에이전트 종료**
 5. 최종 결과 보고: 배포 성공 여부와 함께 **cleanup 실패 내역이 있으면 포함**하여 반환 (배포 성공 + cleanup 실패는 파이프라인 실패로 취급하지 않는다)
 
 ## 실패 시 Opus 전환 규칙
@@ -138,7 +117,7 @@
    |-----------|------|-----------|------|
    | Step 1-5 | dev PR CI 실패 | 코드 수정 → **Step 1**부터 | 새 커밋 필요, 새 dev PR 생성 |
    | Step 1-5 | dev PR 충돌 (`CONFLICTING`) | 충돌 해결 → **Step 1-5**부터 | dev PR 재머지 시도 |
-   | Step 2-2 | CI 실패 (GHCR 빌드) | 코드 수정 → **Step 1**부터 | 새 커밋 필요, 새 dev PR 생성 |
+   | Step 2-2 | CI 실패 | 코드 수정 → **Step 1**부터 | 새 커밋 필요, 새 dev PR 생성 |
    | Step 2-5/6 | 배포 PR 체크 실패 | 코드 수정 → **Step 1**부터 | 새 커밋 필요, 새 dev PR 생성 |
    | Step 3-1 | 배포 PR 충돌 (`CONFLICTING`) | **즉시 중단** → 사용자에게 보고 | 단방향 플로우 전제 위반 — main에 dev에 없는 커밋 존재. AI 자율 해결 금지, 사용자가 main 히스토리 확인 필요 |
    | Step 4-3/4 | CD 실패 | 코드 수정 → **Step 1**부터 | 새 커밋 필요, 배포 이슈/PR 재사용 |
@@ -148,7 +127,7 @@
 
 ## 파괴적 DB 마이그레이션 2단계 배포 원칙
 
-파괴적 마이그레이션은 앱 이미지 롤백 시 Flyway가 적용한 스키마는 되돌아가지 않으므로, Hibernate `validate` 실패로 롤백된 앱도 시작 불가 상태가 된다.
+DB 마이그레이션 도구가 적용한 스키마 변경은 앱 롤백 시 되돌아가지 않으므로, 파괴적 변경이 포함되면 롤백된 앱이 시작 불가 상태가 될 수 있다.
 
 **파괴적 변경 판단 기준**:
 - 2단계 필수: `DROP TABLE/COLUMN`, `ALTER TYPE 축소`, `RENAME COLUMN`, `ADD NOT NULL` (기존 데이터에 영향)
@@ -165,46 +144,24 @@
   1차 배포 완료. 안정 확인 후 2차 배포(파괴적 마이그레이션)가 필요합니다.
 
   2차 배포 작업:
-  - V__drop_xxx.sql 파괴적 마이그레이션 추가
+  - 파괴적 마이그레이션 파일 추가
 
   /problem 또는 /ship 실행 후 위 내용을 전달해주세요.
   ```
 
 ## 환경변수 추가 체크리스트
 
-작업 중 **새 환경변수**를 도입하는 경우, 배포 전에 아래 체크리스트를 모두 확인한다. 하나라도 누락되면 프로덕션 앱이 시작 시 NPE/실패한다.
+작업 중 **새 환경변수**를 도입하는 경우, 배포 전에 아래 경로를 모두 확인한다. 하나라도 누락되면 프로덕션 앱이 시작 시 실패할 수 있다.
 
-### 전달 경로
+### 확인 항목
 
-```
-GitHub Secrets → CD workflow env → SSH envs 파라미터 → Docker Compose environment → 컨테이너 → Spring ${}
-```
+1. **앱 설정 파일**: 환경변수 참조 추가 (프로젝트의 설정 파일 탐색)
+2. **로컬 환경변수 파일**: `.env` 등 로컬 개발용 값 추가
+3. **CD 워크플로우**: `.github/workflows/` 내 CD 워크플로우 파일에 시크릿 매핑 추가
+4. **배포 구성 파일**: Docker Compose 등 배포 구성 파일의 environment 섹션에 추가
+5. **GitHub Secrets**: `gh secret list`로 시크릿 등록 여부를 확인하고, 미등록 시 사용자에게 등록을 요청한다
 
-### 로컬 개발 환경
-
-| # | 파일 | 작업 |
-|---|------|------|
-| 1 | `src/main/resources/application.yml` | `${NEW_VAR}` 참조 추가 |
-| 2 | `src/main/java/.../LoopinBeApplication.java` | `System.setProperty("NEW_VAR", dotenv.get("NEW_VAR"))` 추가 |
-| 3 | `.env` | 로컬 개발용 값 추가 |
-
-### 프로덕션 배포 환경
-
-| # | 파일 | 작업 |
-|---|------|------|
-| 4 | `.github/workflows/cd-oci-a1-main.yml` | `jobs.deploy-main.env`에 `NEW_VAR: ${{ secrets.NEW_VAR }}` 추가 |
-| 5 | 위 파일 동일 | `steps[SSH].with.envs` 파라미터 목록에 `NEW_VAR` 추가 |
-| 6 | `.github/workflows/cd-aws.yml` | 4-5와 동일 (`jobs.deploy-aws`) |
-| 7 | `.github/workflows/cd-oci-e2-app.yml` | 4-5와 동일 (`jobs.deploy-server1`) |
-| 8 | `docker/oci/a1_flex/compose.yml` | app 서비스 `environment`에 `NEW_VAR: ${NEW_VAR}` 추가 |
-| 9 | `docker/aws/compose.yml` | 8과 동일 |
-| 10 | `docker/oci/e2_1_micro/compose.server1.yml` | 8과 동일 |
-
-### GitHub Secrets 확인
-
-`gh secret list`로 시크릿 등록 여부를 확인하고, 미등록 시 사용자에게 등록을 요청한다.
-
-> **제외 대상**: 앱이 아닌 서비스만 배포하는 워크플로우/Compose는 앱 환경변수 불필요 — `cd-oci-a1-server1.yml` (모니터링), `cd-oci-a1-server2.yml` (Loki), `cd-oci-e2-data.yml` (데이터), `compose.server2.yml`
+> 환경변수 전달 경로는 프로젝트마다 다르다. CD 워크플로우를 읽어서 시크릿이 컨테이너까지 전달되는 경로를 파악한 뒤, 모든 경유 지점에 누락 없이 추가한다.
 
 ## 규칙
 
