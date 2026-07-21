@@ -49,6 +49,10 @@ cp "$SCRIPT_DIR/.claude/hooks/validate-git-sensitive.sh" "$PROJECT_DIR/.claude/h
 chmod +x "$PROJECT_DIR/.claude/hooks/validate-git-sensitive.sh"
 echo "  [OK] .claude/hooks/validate-git-sensitive.sh"
 
+cp "$SCRIPT_DIR/.claude/hooks/freeze-test-files.sh" "$PROJECT_DIR/.claude/hooks/freeze-test-files.sh"
+chmod +x "$PROJECT_DIR/.claude/hooks/freeze-test-files.sh"
+echo "  [OK] .claude/hooks/freeze-test-files.sh"
+
 # VERSION 복사
 cp "$SCRIPT_DIR/VERSION" "$PROJECT_DIR/.claude/VERSION"
 echo "  [OK] .claude/VERSION"
