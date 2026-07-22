@@ -1,87 +1,14 @@
-# /ship — 코드 변경 배포 자동화
+# /ship — 코드 변경 배포 자동화 (Claude Code 어댑터)
 
-워킹 트리의 코드 변경사항을 검증하고 배포까지 자동화한다.
-코드 수정이 이미 완료된 상태에서 사용한다. `/problem`과 달리 문제 분석·코드 변경을 수행하지 않는다.
-브랜치명에 `#`이 포함되므로, 모든 git/gh 명령에서 브랜치명은 반드시 따옴표로 감싼다.
+이 명령은 하네스 중립 배포 워크플로우의 **Claude Code 진입점**이다. 절차 원본은 `automation/ship.md`(+ `automation/pipeline.md`)에 있다.
 
-> **빌드/테스트 명령 표기**: "빌드 검증", "테스트 실행" 등은 프로젝트의 빌드 도구(Gradle/Maven 등)에 맞는 실제 명령으로 치환하여 실행한다.
+## 실행
 
-## Preflight
+`automation/ship.md`를 읽고 Preflight → Phase 1~4를 그대로 실행한다. Phase 4에서 `automation/pipeline.md`를 읽어 배포한다.
+사용자 인자(예: `/ship feat 알림 설정 API 추가`)는 `automation/ship.md`의 Phase 1 규칙대로 처리한다.
 
-1. `gh auth status` — 인증 실패 시 **중단**
-2. 현재 상태 확인:
-   - **이슈 브랜치에 있는 경우** (브랜치명이 `<prefix>#<번호>` 형식):
-     - 브랜치명에서 타입과 이슈번호를 파싱
-     - `git log dev..HEAD`와 `git diff`로 변경사항 확인
-     - 커밋도 없고 변경사항도 없으면 **중단** ("배포할 변경사항이 없습니다")
-     - Phase 1, Phase 3을 스킵하고 Phase 2로 직행
-   - **dev 브랜치에 있는 경우**:
-     - `git status --short` — 변경사항이 없으면 **중단** ("배포할 변경사항이 없습니다")
-     - `git stash push -u -m "ship-preflight-stash"` (untracked 파일 포함)
-     - `git pull origin dev` — 최신 dev로 동기화
-     - `git stash pop` — 충돌 발생 시 충돌 파일을 분석하여 자체 해결한 뒤 진행
-     - Phase 1로 진행
+## Claude Code 하네스 설정 (원본 명세에 주입)
 
-## Phase 1: 변경사항 분석
-
-> 사용자가 인자로 타입과 설명을 직접 제공한 경우 (예: `/ship feat 알림 설정 API 추가`), 해당 값을 사용하고 사용자 확인 없이 Phase 2로 직행한다.
-
-1. `git diff`로 변경된 파일과 내용을 분석한다.
-2. 변경 성격에 맞는 타입을 결정한다:
-
-| 타입 | label | 브랜치 prefix | 이슈 템플릿 |
-|------|-------|---------------|-------------|
-| `[FEAT]` | `✨ FEAT` | `feat/` | `기능-구현.md` |
-| `[FIX]` | `🔧 FIX` | `fix/` | `기능-수정.md` |
-| `[BUG]` | `🕷️ BUG` | `bug/` | `오류-수정.md` |
-| `[CHORE]` | `🔩 CHORE` | `chore/` | `기타-수정.md` |
-| `[REFACT]` | `♻️ REFACT` | `refact/` | `리팩토링.md` |
-| `[DOCS]` | `📜 DOC` | `docs/` | `문서-작업.md` |
-
-> 위 label·브랜치 prefix·이슈 템플릿 파일명은 예시다. 프로젝트 컨벤션에 맞게 조정한다.
-
-3. 변경 내용을 한 줄로 요약한다.
-4. **사용자 확인 대기**:
-   ```
-   변경사항 요약:
-   - 타입: [FEAT]
-   - 설명: ...
-   - 변경 파일: N개
-
-   이대로 배포를 진행할까요? (타입이나 설명을 변경하려면 알려주세요)
-   ```
-
-## Phase 2: 검증
-
-1. **빌드 검증**: 프로젝트 빌드 명령 실행
-2. **테스트 검증**: 변경된 파일에 따라 관련 테스트를 실행한다:
-   - API 레이어(Controller / Service / Repository / DTO / Entity) 변경 시 → 해당 도메인의 테스트 실행 (특정 테스트 클래스 지정)
-   - 비API 변경 시 → 변경된 클래스를 의존하는 기존 테스트가 있는지 확인하고, 있으면 실행
-   - 변경 영향 범위가 넓으면 전체 테스트 실행
-3. **환경변수 체크**: 새 환경변수가 도입된 경우, `.claude/common/pipeline.md`의 「환경변수 추가 체크리스트」를 확인한다.
-4. **파괴적 마이그레이션 체크**: DB 마이그레이션 파일이 포함된 경우, `.claude/common/pipeline.md`의 「파괴적 DB 마이그레이션 2단계 배포 원칙」에 따라 파괴적 변경 여부를 판단한다. 파괴적 마이그레이션이 포함되어 있으면 사용자에게 2단계 분리 배포가 필요하다고 보고하고 **중단**한다.
-5. 빌드 또는 테스트 실패 시 → 사용자에게 실패 내용을 보고하고 **중단**
-
-## Phase 3: 이슈 & 브랜치
-
-> Preflight에서 이슈 브랜치로 진입한 경우 이 Phase를 스킵한다.
-
-1. 이슈 생성: `gh issue create` — 제목: `[TYPE] 설명`, 본문: 해당 타입의 이슈 템플릿(`.github/ISSUE_TEMPLATE/`) 구조를 따르되 변경 내용으로 채움
-2. 브랜치 생성: `"<prefix>#<이슈번호>"` → checkout (변경사항은 워킹 트리에 그대로 유지됨)
-
-## Phase 4: 배포
-
-`.claude/common/pipeline.md`를 읽고 해당 절차를 실행한다.
-Preflight는 스킵하고 Step 1부터 시작한다.
-
-전달할 컨텍스트:
-- 브랜치명, 타입, 이슈번호
-- 변경사항 요약 (Phase 1에서 생성한 요약 또는 사용자 인자)
-
-## 규칙
-
-- Phase 1~3에서는 코드를 수정하지 않는다 — 이미 완료된 변경사항을 검증하는 것이 목적이다
-- 빌드 또는 테스트 실패 시 (Phase 2) 자동 수정하지 않고 사용자에게 보고한다
-- Phase 4 (배포)의 파이프라인 실패 처리는 `.claude/common/pipeline.md`의 규칙을 따른다
-- 모든 `gh`/`git` 명령 실패 시 에러 내용 사용자에게 보고
-- 이슈/PR 생성 시 GitHub 템플릿 형식 준수
+- **폴링 모드**: CI/CD·PR 체크 대기는 **`run_in_background: true` Bash + `while` 루프**로 실행한다. 포그라운드 `sleep` 차단·Monitor 도구 금지. 루프 완료 시 세션이 자동 재호출된다. (`automation/pipeline.md` 「폴링 실행 규칙」의 Claude Code 모드)
+- **Co-Author 트레일러**: `automation/pipeline.md` Step 1 커밋 메시지 끝에 `Co-Authored-By: Claude <모델명> <noreply@anthropic.com>`를 붙인다.
+- **안전 규칙**: 「민감 파일 커밋 금지」는 PreToolUse 훅(`.claude/hooks/validate-git-sensitive.sh`)이 `git add/commit/push`를 자동 차단한다 — 원본 명세의 규칙과 이중 방어로 작동한다.

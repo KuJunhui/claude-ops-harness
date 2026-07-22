@@ -16,7 +16,7 @@ FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
 
 [ -n "$FILE_PATH" ] || exit 0
 
-FROZEN_LIST="${CLAUDE_PROJECT_DIR:-.}/.claude/frozen-tests.txt"
+FROZEN_LIST="${CLAUDE_PROJECT_DIR:-.}/.problem/frozen-tests.txt"
 [ -f "$FROZEN_LIST" ] || exit 0
 
 # 대상 파일 → 절대 경로
