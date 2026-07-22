@@ -8,7 +8,7 @@
 > - Codex / Gemini → `ship` 어댑터가 이 파일을 직접 읽어 실행
 >
 > **하네스별 Co-Author 트레일러** (Step 1 커밋 메시지 끝에 붙는 한 줄):
-> - Claude Code → `Co-Authored-By: Claude <모델명> <noreply@anthropic.com>`
+> - Claude Code → `Co-Authored-By: Claude Code <noreply@anthropic.com>`
 > - Codex → `Co-Authored-By: Codex <noreply@openai.com>`
 > - Gemini → `Co-Authored-By: Gemini <noreply@google.com>`
 
