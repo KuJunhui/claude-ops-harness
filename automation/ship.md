@@ -16,24 +16,24 @@
 ## Preflight
 
 1. `gh auth status` — 인증 실패 시 **중단**
-2. 현재 상태 확인:
+2. `git fetch origin dev` — 이후 모든 dev 대비 비교(변경 유무 판정, 변경 분석)는 **`origin/dev` 기준**이다. 로컬 `dev`는 뒤처져 있을 수 있으므로 비교 기준으로 쓰지 않는다.
+3. 현재 상태 확인:
    - **이슈 브랜치에 있는 경우** (브랜치명이 `<prefix>#<번호>` 형식):
      - 브랜치명에서 타입과 이슈번호를 파싱
-     - `git log dev..HEAD`와 `git diff`로 변경사항 확인
-     - 커밋도 없고 변경사항도 없으면 **중단** ("배포할 변경사항이 없습니다")
+     - `git log origin/dev..HEAD`와 `git status --porcelain`으로 변경사항 확인 — 커밋도 변경도 없으면 **중단** ("배포할 변경사항이 없습니다"). 변경 유무 판정에 `git diff`(무인자)를 쓰지 않는다 — staged 변경이 보이지 않는다.
+     - 최신 동기화: `git pull --rebase --autostash origin dev` — **충돌 시 자동 해결하지 않는다**: rebase 충돌은 `git rebase --abort`로 원상복구 후 보고하고 중단, autostash 재적용 충돌은 변경이 stash에 보존된 상태이므로(`git stash list`로 확인) 그대로 두고 보고하고 중단한다. 이 rebase로 Phase 2가 실제 push될 트리를 검증하고, `automation/pipeline.md` Step 1-2의 rebase는 사실상 no-op이 된다.
      - Phase 1, Phase 3을 스킵하고 Phase 2로 직행
    - **dev 브랜치에 있는 경우**:
-     - `git status --short` — 변경사항이 없으면 **중단** ("배포할 변경사항이 없습니다")
-     - `git stash push -u -m "ship-preflight-stash"` (untracked 파일 포함)
-     - `git pull origin dev` — 최신 dev로 동기화
-     - `git stash pop` — 충돌 발생 시 충돌 파일을 분석하여 자체 해결한 뒤 진행
+     - `git log origin/dev..HEAD --oneline` — **push 안 된 로컬 커밋이 있으면 중단**하고 커밋 목록과 함께 보고한다. dev 직접 커밋은 ship가 배포하지 않는다 — 워킹트리만 보는 아래 판정이 이 커밋들을 놓치므로, 사용자가 브랜치로 옮기는 등 직접 처리해야 한다.
+     - `git status --porcelain` — 변경사항이 없으면 **중단** ("배포할 변경사항이 없습니다")
+     - 최신 동기화: `git pull --rebase --autostash origin dev` — 충돌 처리는 위 이슈 브랜치 경우와 동일하다(**자동 해결 금지** — 원상복구·보고·중단).
      - Phase 1로 진행
 
 ## Phase 1: 변경사항 분석
 
 > 사용자가 인자로 타입과 설명을 직접 제공한 경우 (예: `ship feat 알림 설정 API 추가`), 해당 값을 사용하고 사용자 확인 없이 Phase 2로 직행한다.
 
-1. `git diff`로 변경된 파일과 내용을 분석한다.
+1. `git diff origin/dev`와 `git status --porcelain`(untracked 신규 파일 확인)으로 변경된 파일과 내용을 분석한다. 무인자 `git diff`를 쓰지 않는다 — staged·커밋된 변경이 보이지 않는다. Preflight의 rebase가 선행되므로 이 diff에는 dev 쪽 무관한 변경이 섞이지 않는다.
 2. 변경 성격에 맞는 타입을 결정한다:
 
 | 타입 | label | 브랜치 prefix | 이슈 템플릿 |
@@ -78,8 +78,7 @@
 
 ## Phase 4: 배포
 
-`automation/pipeline.md`를 읽고 해당 절차를 실행한다.
-Preflight는 스킵하고 Step 1부터 시작한다.
+`automation/pipeline.md`를 읽고 Step 1부터 실행한다.
 CI/CD·PR 체크 대기 폴링은 `automation/pipeline.md`의 「폴링 실행 규칙」에 정의된 **현재 하네스의 폴링 모드**를 따른다 (진입 어댑터가 지정).
 
 전달할 컨텍스트:

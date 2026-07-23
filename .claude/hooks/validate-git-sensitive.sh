@@ -24,6 +24,7 @@ if ! has_git_sub '(add|commit|push)'; then
   exit 0
 fi
 
+# 패턴 원천은 automation/bin/sensitive-gate.sh의 정규식 — 변경 시 함께 갱신한다.
 SENSITIVE_PATTERNS=(
   ".claude/settings.local.json"
   ".env"
@@ -33,6 +34,8 @@ SENSITIVE_PATTERNS=(
   "*.tfstate"
   "*.pem"
   "*.p12"
+  "*.p8"
+  "*.key"
   "id_rsa*"
 )
 
@@ -42,10 +45,13 @@ matches_sensitive() {
   local file="$1" pattern base
   base=$(basename "$file")
   for pattern in "${SENSITIVE_PATTERNS[@]}"; do
+    # 패턴의 glob 매칭(*.pem 등)이 의도이므로 case 패턴을 따옴표로 감싸지 않는다
+    # shellcheck disable=SC2254
     case "$file" in
       $pattern|*/$pattern) BLOCKED_FILES+=("$file"); return ;;
     esac
     # .env.prod 같은 확장 변형 (basename 기준)
+    # shellcheck disable=SC2254
     case "$base" in
       $pattern|${pattern}.*) BLOCKED_FILES+=("$file"); return ;;
     esac
@@ -68,6 +74,8 @@ if has_git_sub 'add'; then
   if [ -z "$ADD_ARGS" ] || echo "$ADD_ARGS" | grep -qE '(^|[[:space:]])(-A|--all|-u|--update|\.|:/|\*)'; then
     check_file_list < <(git ls-files --others --modified --exclude-standard 2>/dev/null)
   else
+    # 인자들을 공백 분리해 줄 단위로 넘기는 것이 의도다
+    # shellcheck disable=SC2086
     check_file_list < <(printf '%s\n' $ADD_ARGS)
   fi
 fi

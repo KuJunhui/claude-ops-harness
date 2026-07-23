@@ -52,6 +52,13 @@ copy_plain() {
 echo "-- automation/ (하네스 중립 명세)"
 copy_plain "automation/ship.md"
 copy_plain "automation/pipeline.md"
+# 폴링·게이트 스크립트 (pipeline.md가 참조)
+copy_plain "automation/bin/pr-gate.sh"
+copy_plain "automation/bin/pr-gate.jq"
+copy_plain "automation/bin/run-wait.sh"
+copy_plain "automation/bin/sensitive-gate.sh"
+copy_plain "automation/bin/smoke-test.sh"
+chmod +x "$PROJECT_DIR"/automation/bin/*.sh
 
 # ── Claude Code 어댑터 ────────────────────────────────────────
 if want claude; then
