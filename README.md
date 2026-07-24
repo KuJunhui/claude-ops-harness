@@ -2,7 +2,7 @@
 
 Java/Spring 프로젝트 운영 중 발생하는 문제를 **분석부터 배포까지 자동화**하는 **멀티 LLM 하네스**입니다.
 
-문제 분석 → 해결책 제시 → (Codex Test-First) 코드 변경 → 검증 → 배포까지 원스톱으로 처리합니다.
+문제 분석 → 해결책 제시 → (독립 테스트 작성 우선 + 동결) 코드 변경 → 검증 → 배포까지 원스톱으로 처리합니다.
 동일한 배포 워크플로우를 **Claude Code · Codex · Gemini** 세 하네스에서 공유하며, 이 중 **Claude Code가 기준(메인) 하네스**입니다 — Codex·Gemini는 같은 중립 명세를 이식한 어댑터입니다.
 
 > **공유용 하네스**: 이 레포는 특정 프로젝트에 종속되지 않도록 빌드/테스트 명령, 테스트 프레임워크, 워크플로우 파일명, 배포 경로를 **추상화**하여 작성되었습니다. Java/Spring 계열 프로젝트라면 별도 수정 없이 설치하여 쓸 수 있고, 빌드 도구(Gradle/Maven)나 CI/CD 워크플로우가 다르면 명령을 프로젝트에 맞게 치환하면 됩니다. `dev` → `main` 단방향 플로우 + default branch가 `dev`인 브랜치 전략을 전제로 합니다.
@@ -13,7 +13,7 @@ Java/Spring 프로젝트 운영 중 발생하는 문제를 **분석부터 배포
 
 | 하네스 | `/ship` (배포 자동화) | `/problem` (분석→배포) | 비고 |
 |--------|----------------------|------------------------|------|
-| **Claude Code** | `/ship` (네이티브 슬래시) | `/problem` (네이티브 슬래시) | PreToolUse 훅으로 민감 파일·동결 테스트 보호 |
+| **Claude Code** | `/ship` (네이티브 슬래시) | `/problem` (네이티브 슬래시) | PreToolUse 훅으로 민감 파일·동결 테스트 산출물 보호 |
 | **Gemini** | `/ship` (네이티브 슬래시) | — | `.gemini/commands/ship.toml` 커스텀 명령 |
 | **Codex** | `ship` / `배포해줘` (평문) | — | Codex엔 커스텀 슬래시 명령이 없어 `.codex/skills`의 스킬을 평문으로 호출 |
 
@@ -54,7 +54,7 @@ CI/CD·PR 체크 대기는 루프를 즉석에서 작성하지 않고 `automatio
 | `.claude/commands/ship.md` | Claude | `/ship` Claude 어댑터 (→ `automation/ship.md`) |
 | `.claude/common/pipeline.md` | Claude | 파이프라인 Claude 어댑터 (→ `automation/pipeline.md`) |
 | `.claude/hooks/validate-git-sensitive.sh` | Claude | PreToolUse 훅 — 민감 파일(`.env`, `settings.local.json` 등) 커밋 차단 |
-| `.claude/hooks/freeze-test-files.sh` | Claude | PreToolUse 훅 — 동결 테스트 파일의 Edit/Write 차단 |
+| `.claude/hooks/freeze-test-files.sh` | Claude | PreToolUse 훅 — 동결 테스트 소스·fixture의 Edit/Write 차단 |
 | `.claude/settings.json` | Claude | 위 두 훅 등록 |
 | `.codex/skills/ship/SKILL.md` | Codex | `ship` 스킬 (평문 호출) |
 | `.codex/config.toml` | Codex | (선택) IDE MCP 연결 설정 |
@@ -62,7 +62,7 @@ CI/CD·PR 체크 대기는 루프를 즉석에서 작성하지 않고 `automatio
 
 > 워크플로우 상태 파일은 `.problem/`(커밋 대상 감사 기준) 및 `.problem/local/`(로컬 전용)에 저장됩니다. `.gitignore`에 `.problem/local/`을 추가하세요.
 
-> **핵심 개념**(Codex Test-First & 동결, 병렬 워크트리, 메인 세션 직접 배포 파이프라인)과 그 **설계 이유**는 이 문서 하단의 [설계 의도](#설계-의도) 섹션에서 다룹니다.
+> **핵심 개념**(테스트 작성자 분리 우선 + 모드 공통 Test-First·동결, 병렬 워크트리, 메인 세션 직접 배포 파이프라인)과 그 **설계 이유**는 이 문서 하단의 [설계 의도](#설계-의도) 섹션에서 다룹니다.
 
 ## 설치 방법
 
@@ -168,10 +168,10 @@ cd /path/to/your-project
 
 아래 2곳은 **조건부**로만 개입이 발생합니다:
 
-- **Codex 인증** (Phase 4) — Codex CLI가 설치돼 있으나 인증이 필요한 경우에만, Codex 모드 진행 / Claude Code 단독 모드 중 선택을 요청 (미설치면 개입 없이 자동으로 Claude Code 단독 모드)
-- **TEST-DISPUTE** (Phase 4~5, 순차 실행 시) — 구현 중 동결 테스트가 스펙을 잘못 해석했다고 판단되면 "테스트 수정 / 구현 수정" 확인을 요청 (병렬 실행 시에는 대기 없이 보고 후 통합 단계에서 처리)
+- **Codex 인증** (Phase 4) — Codex CLI가 설치돼 있으나 인증이 필요한 경우에만, Codex 모드 진행 / Claude Code 단독 모드 중 선택을 요청 (미설치면 개입 없이 자동으로 Claude Code 단독 모드). 두 모드는 **테스트 작성자만** 다르고 RED 게이트·정성 리뷰·동결·감사 절차는 동일
+- **TEST-DISPUTE** (Phase 4~5, 순차 실행 시) — 구현 중 동결 테스트가 스펙을 잘못 해석했다고 판단되면 구현 수정 / 테스트 재파생 / 스펙 해석 확정을 요청 (병렬 실행 시에는 대기 없이 보고 후 통합 단계에서 처리)
 
-위 지점을 제외한 나머지 과정(브랜치 생성, Codex 테스트 생성·동결, 코드 변경, 테스트, PR, CI/CD, 배포)은 자동으로 진행됩니다.
+위 지점을 제외한 나머지 과정(브랜치 생성, 모드별 테스트 생성·검증·동결, 코드 변경, 테스트, PR, CI/CD, 배포)은 자동으로 진행됩니다.
 
 ## `/ship` 사용법 (Claude Code · Codex · Gemini)
 
@@ -220,11 +220,11 @@ dev 브랜치에서 타입·설명 없이 실행한 경우 **1곳**:
 
 **이유**: API 레이어 변경은 비즈니스 로직에 직접 영향을 주므로 반드시 Test-First로 검증해야 합니다. 반면 설정 변경이나 인프라 수정에 불필요한 테스트를 강제하면 오버헤드만 늘어납니다. 작업 성격에 따라 절차를 분리함으로써 **안전성과 속도를 동시에 확보**합니다.
 
-#### 2. Codex Test-First & 동결(freeze)
+#### 2. 테스트 작성자 분리 우선 & 모드 공통 동결(freeze)
 
-`[API]` 작업은 구현 전에 **Codex CLI가 테스트(RED) + 컴파일용 스텁을 먼저 생성·커밋하여 동결**하고, 구현자는 동결된 테스트를 통과시키는 구현만 수행합니다. PreToolUse 훅이 동결 테스트의 편집을 차단하고, Phase 5의 `git diff` 사후 감사가 우회 편집까지 잡습니다.
+`[API]` 작업은 구현 전에 **Claude Code가 신규 계약에 필요한 최소 스텁을 준비하고 Codex가 테스트를 독립 작성**합니다. 이후 Discovery·컴파일 GREEN을 확인하고, 신규·변경 테스트 메서드별로 구현 전 기준선에서 RED인지 또는 구현과 독립적인 GREEN인지 근거를 기록합니다. 정성 리뷰 후 생성·수정된 테스트 소스·fixture와 스텁(있는 경우)을 함께 커밋합니다. Codex를 쓸 수 없으면 Claude Code가 테스트도 작성하지만, 같은 게이트·동결·감사 절차를 적용합니다. PreToolUse 훅이 동결 테스트 산출물의 편집을 차단하고, Phase 5의 `git diff` 사후 감사가 우회 편집까지 잡습니다.
 
-**이유**: AI가 코드를 작성할 때 가장 큰 위험은 "돌아가는 것 같지만 실제로는 스펙과 다른 코드"입니다. **테스트 작성자(Codex)와 구현자(Claude Code)를 분리**하면 테스트가 진짜 독립 명세(spec)가 되어, 구현이 스펙에 맞는지 자동 검증됩니다. 테스트를 동결해 "실패 시 테스트가 아닌 구현을 수정"하는 규칙을 훅+감사 두 층으로 강제함으로써 이 명세 역할을 보호합니다. (Codex를 못 쓰는 환경에서는 단독 모드로 폴백하되 Test-First 원칙은 유지합니다.)
+**이유**: AI가 코드를 작성할 때 가장 큰 위험은 "돌아가는 것 같지만 실제로는 스펙과 다른 코드"입니다. **테스트 작성자(Codex)와 구현자(Claude Code)를 분리**하면 테스트가 독립 명세(spec)가 되어 구현을 더 강하게 검증합니다. Codex가 없더라도 테스트를 먼저 RED로 검증·동결하면 구현 루프에서 테스트를 고쳐 통과시키는 우회를 막을 수 있습니다. 스텁 설계권을 구현측에 두고 Codex의 수정 범위를 테스트·fixture로 제한해, 코드베이스 컨텍스트가 적은 테스트 작성자에게 아키텍처 결정을 넘기지 않습니다.
 
 > Codex 테스트 생성 호출은 stdin/stdout 파이프 상속으로 인한 프로세스 hang 위험이 있어, ① 프롬프트 stdin 리다이렉트 ② 출력 파일 리다이렉트 ③ 프롬프트 내 빌드 실행 금지 ④ `timeout` 상한의 **4중 방어**로 이를 원천 차단합니다.
 
@@ -260,6 +260,6 @@ dev 브랜치에서 타입·설명 없이 실행한 경우 **1곳**:
 
 #### 8. 민감 파일 커밋 차단 & 동결 테스트 보호 Hook
 
-PreToolUse hook 두 개로 (a) `.env`·`.claude/settings.local.json` 등 민감 파일이 git에 추가되는 것을 사전 차단하고, (b) Codex가 작성한 동결 테스트 파일의 Edit/Write를 차단합니다.
+PreToolUse hook 두 개로 (a) `.env`·`.claude/settings.local.json` 등 민감 파일이 git에 추가되는 것을 사전 차단하고, (b) 작성 모드와 무관하게 동결된 테스트 소스·fixture의 Edit/Write를 차단합니다.
 
 **이유**: AI 에이전트가 `git add -A`를 실행하면 의도치 않게 시크릿이 커밋될 수 있고, RED 테스트를 통과시키지 못할 때 "테스트를 고쳐버리는" 우회 유혹이 생깁니다. 두 훅은 **자동화의 편의성을 유지하면서 보안 사고와 명세 훼손을 예방**합니다. (동결 훅은 예방, Phase 5의 `git diff` 감사는 탐지 — 두 층으로 Bash 우회 편집까지 방어합니다.) 민감 파일 차단은 훅에만 의존하지 않고 파이프라인 Step 1에서 **모든 하네스가 `automation/bin/sensitive-gate.sh`**(스테이징 후 `git diff --cached` 검사, 정규식이 패턴의 단일 원천)를 실행하므로, 훅이 없는 Codex/Gemini도 기계적으로 커버되고 Claude Code는 훅과 이중 방어됩니다.

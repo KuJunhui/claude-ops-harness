@@ -45,7 +45,7 @@ CI/CD·PR 체크 대기는 `automation/bin/`의 **폴링 스크립트**(`pr-gate
 
 ## Step 1: 커밋 & PR & 머지 (dev)
 
-1. `git status --short` — 커밋 안 된 변경이 있으면 `git add -A` → **민감 파일 게이트 통과 후** 커밋 (메시지 끝에 **현재 하네스의 Co-Author 트레일러**를 붙인다 — 진입 어댑터가 지정한 `Co-Authored-By: <이름> <이메일>` 한 줄). 이미 커밋됐으면 스킵. 게이트는 반드시 스테이징 **후**에 돌린다 — add 이전 검사로는 untracked였던 민감 파일이 잡히지 않는다:
+1. 먼저 `git rm --cached --ignore-unmatch .problem/frozen-tests.txt`로 감사용 동결 목록을 인덱스에서 제거한다(워킹 트리 파일은 배포 성공까지 훅 보호용으로 유지). 그다음 `git status --short`를 확인해 커밋 안 된 변경이 있으면 `git add -A -- ':!.problem/frozen-tests.txt' ':!.problem/local'` → **민감 파일 게이트 통과 후** 커밋한다. Step 1 재시작 때도 같은 제거·제외 순서를 반복하여 동결 목록이 다시 추적되지 않게 한다. 메시지 끝에는 **현재 하네스의 Co-Author 트레일러**를 붙인다 — 진입 어댑터가 지정한 `Co-Authored-By: <이름> <이메일>` 한 줄. 제거·스테이징 후에도 변경이 없으면 커밋을 스킵한다. 게이트는 반드시 스테이징 **후**에 돌린다 — add 이전 검사로는 untracked였던 민감 파일이 잡히지 않는다:
    - 게이트: `automation/bin/sensitive-gate.sh` 실행. `SENSITIVE_GATE result=PASS` → 커밋 진행. `result=BLOCKED`(종료코드 1) → 출력된 파일을 `git reset HEAD <파일>`로 해제하고 보고 후 중단. `result=ERROR` → git 조회 실패(fail-closed) — 통과로 취급하지 않고 보고 후 중단. (Claude Code는 PreToolUse 훅이 추가로 이중 방어한다.)
 2. `git pull origin dev --rebase` — 충돌 시 `git rebase --abort` 후 보고하고 중단. (ship Preflight에서 이미 rebase했으므로 보통 no-op이다 — 검증이 도는 동안 dev가 움직인 경우의 안전망.)
 3. `git push --force-with-lease -u origin "<브랜치명>"`
